@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Auto-Injetor
 // @namespace    http://tampermonkey.net/
-// @version      10.0
-// @description  Bypass de vídeos, resolvedor de provas de múltipla escolha e escritor fantasma para plataformas EAD (Unicte, Noz, Cademi).
+// @version      15.0
+// @description  Bypass de vídeos, resolvedor de provas de múltipla escolha e escritor fantasma para plataformas EAD (Unicte, Noz, Cademi, SpBIM).
 // @author       Você
 // @match        *://*/*
 // @grant        none
@@ -10,6 +10,238 @@
 
 (function() {
     'use strict';
+
+    // =========================================================================
+    // MÓDULO EXCLUSIVO SPBIM (ISOLADO — SEM CONFLITO COM UNICTE/NOZ/CADEMI)
+    // =========================================================================
+    if (window.location.hostname.includes('spbim.com.br')) {
+        let ultimaPaginaCapturada = null;
+        let executandoFilaSpBIM = false;
+
+        // Intercepta respostas do Inertia.js caso ocorram via XHR
+        const originalXHR = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(body) {
+            this.addEventListener('load', function() {
+                try {
+                    const data = JSON.parse(this.responseText);
+                    if (data && data.props && (data.props.moduleTree || data.props.course)) {
+                        ultimaPaginaCapturada = data;
+                    }
+                } catch (e) {}
+            });
+            return originalXHR.call(this, body);
+        };
+
+        const obterTokenXsrf = () => {
+            const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        };
+
+        const obterDadosInertia = async () => {
+            // 1. Se já capturamos via XHR
+            if (ultimaPaginaCapturada && ultimaPaginaCapturada.props) {
+                return ultimaPaginaCapturada;
+            }
+
+            // 2. Tenta no DOM atual (#app ou [data-page])
+            const appEl = document.getElementById('app') || document.querySelector('[data-page]');
+            if (appEl) {
+                const rawPage = appEl.getAttribute('data-page');
+                if (rawPage) {
+                    try {
+                        const parsed = JSON.parse(rawPage);
+                        if (parsed && parsed.props) return parsed;
+                    } catch (e) {}
+                }
+                const vuePage = appEl.__vue_app__?.config?.globalProperties?.$page;
+                if (vuePage && vuePage.props && (vuePage.props.moduleTree || vuePage.props.course)) {
+                    return vuePage;
+                }
+            }
+
+            // 3. Fallback infalível: busca o HTML da página atual e extrai o atributo data-page original do servidor
+            try {
+                const res = await fetch(window.location.href, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'text/html,application/xhtml+xml' }
+                });
+                const html = await res.text();
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                const pageNode = doc.querySelector('[data-page]') || doc.getElementById('app');
+                if (pageNode) {
+                    const dataPageStr = pageNode.getAttribute('data-page');
+                    if (dataPageStr) {
+                        const parsed = JSON.parse(dataPageStr);
+                        if (parsed && parsed.props) return parsed;
+                    }
+                }
+            } catch (e) {
+                console.error('❌ [SpBIM] Falha ao buscar data-page via HTML:', e);
+            }
+
+            return null;
+        };
+
+        const extrairTodasAsAulas = (props) => {
+            const mapa = new Map();
+            const varrer = (modulos) => {
+                if (!Array.isArray(modulos)) return;
+                modulos.forEach(mod => {
+                    if (Array.isArray(mod.videos)) {
+                        mod.videos.forEach(v => {
+                            if (v && v.id) mapa.set(Number(v.id), v);
+                        });
+                    }
+                    if (Array.isArray(mod.children)) {
+                        varrer(mod.children);
+                    }
+                });
+            };
+            varrer(props?.moduleTree);
+            varrer(props?.course?.modules);
+            varrer(props?.course?.all_modules);
+            return Array.from(mapa.values());
+        };
+
+        const criarPainelStatus = () => {
+            let box = document.getElementById('spbim-autoinjetor-hud');
+            if (box) return box;
+
+            box = document.createElement('div');
+            box.id = 'spbim-autoinjetor-hud';
+            box.style.cssText = `
+                position: fixed; bottom: 16px; right: 16px; width: 350px;
+                background: #0f172a; color: #f8fafc; font-family: system-ui, sans-serif;
+                font-size: 12px; border: 2px solid #4f46e5; border-radius: 10px;
+                padding: 12px; z-index: 999999; box-shadow: 0 10px 25px rgba(0,0,0,0.7);
+            `;
+            document.body.appendChild(box);
+            return box;
+        };
+
+        const atualizarHUD = (html) => {
+            const box = criarPainelStatus();
+            box.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-weight:700;color:#818cf8;">
+                    <span>⚡ Auto-Injetor SpBIM (V15.0)</span>
+                </div>
+                <div style="color:#cbd5e1;line-height:1.4;">${html}</div>
+            `;
+        };
+
+        const executarBypassSpBIM = async () => {
+            if (executandoFilaSpBIM) return;
+            if (!window.location.pathname.includes('/student/curso/')) return;
+
+            executandoFilaSpBIM = true;
+            atualizarHUD('🔍 Lendo lista de aulas do curso...');
+
+            const pageData = await obterDadosInertia();
+            if (!pageData || !pageData.props) {
+                atualizarHUD('❌ Não foi possível ler os dados do curso.');
+                executandoFilaSpBIM = false;
+                return;
+            }
+
+            const props = pageData.props;
+            const courseId = props.course?.id || window.location.pathname.split('/').pop();
+            const inertiaVersion = pageData.version || '';
+            const todasAulas = extrairTodasAsAulas(props);
+            const concluidasSet = new Set((props.completedVideos || []).map(Number));
+
+            const pendentes = todasAulas.filter(v => !concluidasSet.has(Number(v.id)));
+
+            console.log(`🎯 [SpBIM] Curso #${courseId}: ${todasAulas.length} aulas mapeadas | ${concluidasSet.size} concluídas | ${pendentes.length} pendentes.`);
+
+            if (pendentes.length > 0) {
+                let concluidasAgora = 0;
+
+                for (const aula of pendentes) {
+                    concluidasAgora++;
+                    const totalFeito = concluidasSet.size + concluidasAgora;
+                    const pct = Math.round((totalFeito / todasAulas.length) * 100);
+                    const tituloCurto = (aula.display_title || aula.title || `Aula #${aula.id}`).substring(0, 40);
+
+                    atualizarHUD(`
+                        <div>Enviando conclusão direta para o servidor...</div>
+                        <div style="margin-top:4px;font-weight:bold;color:#34d399;">
+                            [${totalFeito}/${todasAulas.length}] ${tituloCurto}
+                        </div>
+                        <div style="margin-top:6px;background:#1e293b;height:6px;border-radius:3px;overflow:hidden;">
+                            <div style="background:#10b981;height:100%;width:${pct}%;"></div>
+                        </div>
+                    `);
+
+                    try {
+                        await fetch('https://plataforma.spbim.com.br/student/complete', {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            headers: {
+                                'Accept': 'text/html, application/xhtml+xml',
+                                'Content-Type': 'application/json',
+                                'X-Requested-With': 'XMLHttpRequest',
+                                'X-XSRF-TOKEN': obterTokenXsrf(),
+                                'X-Inertia': 'true',
+                                'X-Inertia-Version': inertiaVersion
+                            },
+                            body: JSON.stringify({
+                                video_id: aula.id,
+                                is_completed: true
+                            })
+                        });
+                        console.log(`✅ [SpBIM] Aula concluída: ID ${aula.id} (${aula.title})`);
+                    } catch (err) {
+                        console.error(`❌ [SpBIM] Erro na aula ${aula.id}:`, err);
+                    }
+
+                    // Pausa de 350ms entre requisições para evitar bloqueio 429
+                    await new Promise(r => setTimeout(r, 350));
+                }
+            }
+
+            // Consulta o endpoint de validação do curso e certificado
+            try {
+                const resComp = await fetch(`https://plataforma.spbim.com.br/student/classroom/course/${courseId}/completion`, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Accept': 'application/json, text/plain, */*',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+                const statusCurso = await resComp.json();
+                console.log('🏆 [SpBIM] Status de conclusão do curso:', statusCurso);
+
+                const certHtml = statusCurso.certificate_url
+                    ? `<a href="${statusCurso.certificate_url}" target="_blank" style="display:block;margin-top:8px;background:#10b981;color:#000;text-align:center;padding:6px;border-radius:6px;font-weight:bold;text-decoration:none;">🎓 ABRIR CERTIFICADO</a>`
+                    : `<div style="margin-top:6px;color:#fbbf24;font-size:11px;">Certificado: ${statusCurso.certificate_url ?? 'null'} | Avaliado (has_rating): ${statusCurso.has_rating}</div>`;
+
+                atualizarHUD(`
+                    <div style="color:#10b981;font-weight:bold;">✅ Servidor: ${statusCurso.completed}/${statusCurso.total} aulas (${statusCurso.progress}%)</div>
+                    <div style="font-size:11px;margin-top:2px;">Curso Completo (complete): <b>${statusCurso.complete}</b></div>
+                    ${certHtml}
+                `);
+
+                // Se acabamos de concluir aulas, recarrega a página 1 única vez para atualizar a barra lateral e liberar o certificado na UI
+                if (pendentes.length > 0) {
+                    setTimeout(() => window.location.reload(), 2000);
+                }
+            } catch (e) {
+                if (pendentes.length > 0) {
+                    setTimeout(() => window.location.reload(), 1500);
+                }
+            }
+        };
+
+        if (document.readyState === 'loading') {
+            window.addEventListener('DOMContentLoaded', () => setTimeout(executarBypassSpBIM, 1200));
+        } else {
+            setTimeout(executarBypassSpBIM, 1200);
+        }
+
+        return; // Isolamento total: não executa nenhum código de outras plataformas na SpBIM!
+    }
 
     let mudandoDePagina = false;
     let aguardandoResultado = false;
@@ -43,7 +275,7 @@
     // INJEÇÃO DE VÍDEOS (COMUM)
     // ==========================================
     setTimeout(() => {
-        console.log("🤖 [Tampermonkey] Iniciando Escritor Fantasma (V10.0)...");
+        console.log("🤖 [Tampermonkey] Iniciando Escritor Fantasma (V15.0)...");
 
         const botoesProgresso = Array.from(document.querySelectorAll('a.progresso-click'));
         if (botoesProgresso.some(btn => btn.classList.contains('progresso-realizado') || btn.textContent.toLowerCase().includes('desmarcar'))) { irParaProximaAula(); return; }
