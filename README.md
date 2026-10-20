@@ -1,9 +1,13 @@
 # Auto-Injetor 🤖🚀
 
-An advanced and universal Tampermonkey script that automates lesson progress and intelligently solves assessments on modern E-Learning platforms like Unicte, Noz, and Cademi.
+An advanced and universal Tampermonkey script that automates lesson progress and intelligently solves assessments on modern E-Learning platforms like Unicte, Noz, Cademi, and SpBIM.
 
 ## 🔥 Key Features
 
+- **SpBIM Direct API Engine (V15.0):**
+  - Automatically parses the Inertia.js course tree (`moduleTree`) to map all lessons across every module.
+  - Sends authenticated completion requests (`POST /student/complete`) directly to the backend, completing entire courses in seconds without needing to play videos or click the sidebar.
+  - Real-time floating HUD showing completion progress (`completed/total`), server validation status, and direct certificate access.
 - **Auto-Advance:** Detects and skips lessons that have already been completed.
 - **Video Bypass (Iframes and Native):** Bypasses video players like Vimeo, YouTube, and PandaVideo, instantly simulating that the video has been watched to the end.
 - **Multi-Threaded Quiz Solver:** 
@@ -22,8 +26,8 @@ An advanced and universal Tampermonkey script that automates lesson progress and
 
 ## 🛠️ Supported Technologies
 
-- SPA Platforms (React/Vue/Remix)
-- Domains natively supported by the Quiz logic engine: `unicte.com` and `appnoz.com.br`.
+- SPA Platforms (React/Vue/Inertia.js/Remix)
+- Domains natively supported: `unicte.com`, `appnoz.com.br`, `spbim.com.br`, and Cademi-based platforms.
 
 ## 📝 License
 
