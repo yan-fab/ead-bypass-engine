@@ -1,6 +1,6 @@
-# Auto-Injetor 🤖🚀
+# EAD Bypass Engine 🤖🚀
 
-An advanced and universal Tampermonkey script that automates lesson progress and intelligently solves assessments on modern E-Learning platforms like Unicte, Noz, Cademi, and SpBIM.
+An advanced and universal Tampermonkey automation suite that accelerates lesson progress and intelligently solves assessments on modern E-Learning / LMS platforms like Unicte, Noz, Cademi, and SpBIM.
 
 ## 🔥 Key Features
 
@@ -20,7 +20,7 @@ An advanced and universal Tampermonkey script that automates lesson progress and
 ## 📥 How to Install
 
 1. Install the [Tampermonkey](https://www.tampermonkey.net/) extension in your browser.
-2. Create a new script.
+2. Create a new script (or download `auto-injetor.user.js` directly from the [Releases](../../releases) page).
 3. Copy the entire content of the `auto-injetor.user.js` file and paste it into the Tampermonkey dashboard.
 4. Save and enable the script.
 
